@@ -42,6 +42,12 @@ struct HMCState {
     config: HMCConfig
 }
 
+impl HMCState {
+    fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
+
+    }
+}
+
 struct Model {
     grid: PotentialGrid,
     hmc: HMCState,
@@ -66,6 +72,12 @@ fn update(_app: &App, _model: &mut Model, _update: Update) {
     
 }
 
-fn view(_app: &App, _model: &Model, frame: Frame){
+fn view(app: &App, _model: &Model, frame: Frame){
     frame.clear(PURPLE);
+    let draw = app.draw();
+    let (w, h) = app.main_window().inner_size_pixels();
+    let img = nannou::image::DynamicImage::new_rgb8(w, h);
+    let texture = wgpu::Texture::from_image(app, &img);
+    draw.texture(&texture);
+    draw.to_frame(app, &frame).unwrap()
 }
