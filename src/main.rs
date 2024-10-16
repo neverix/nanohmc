@@ -121,6 +121,9 @@ fn view(app: &App, model: &Model, frame: Frame) {
     frame.clear(PURPLE);
     let draw = app.draw();
     draw.texture(&model.grid_texture);
-    draw.ellipse().radius(10f32).xy(model.hmc.position.try_to_vec2().unwrap());
+    let (w, h) = app.main_window().inner_size_points();
+    let particle = model.hmc.position.try_to_vec2().unwrap() ;
+    let particle = particle - Vec2::new(0.5, 0.5);
+    draw.xy(Vec2::new(w as f32, -h as f32) * particle).ellipse().radius(10f32).color(RED);
     draw.to_frame(app, &frame).unwrap();
 }
