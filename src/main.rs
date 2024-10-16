@@ -1,11 +1,25 @@
 #![feature(trait_alias)]
-use nannou::prelude::*;
+use nannou::{image::DynamicImage, prelude::*};
 
 fn main() {
     nannou::app(model)
         .update(update)
         .simple_window(view)
         .run();
+}
+
+trait TryToVec2 {
+    fn try_to_vec2(&self) -> Option<Vec2>;
+}
+
+impl TryToVec2 for Vec<f32> {
+    fn try_to_vec2(&self) -> Option<Vec2> {
+        if self.len() == 2 {
+            Some(Vec2::new(self[0], self[1]))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -51,9 +65,11 @@ impl HMCState {
 struct Model {
     grid: PotentialGrid,
     hmc: HMCState,
+    grid_texture: wgpu::Texture,
 }
 
-fn model(_app: &App) -> Model {
+fn model(app: &App) -> Model {
+    let img = DynamicImage::new_rgb8(2, 2);
     Model {
         grid: PotentialGrid::default(),
         hmc: HMCState {
@@ -64,44 +80,47 @@ fn model(_app: &App) -> Model {
                 num_steps: 10,
                 mass: 1.0,
             }
-        }
+        },
+        grid_texture: wgpu::Texture::from_image(app, &img)
     }
 }
 
-fn update(_app: &App, _model: &mut Model, _update: Update) {
-    
+fn update(app: &App, model: &mut Model, _update: Update) {
+    let (w, h) = app.main_window().inner_size_points();
+    let (w, h) = (w.max(2.0) as u32, h.max(2.0) as u32);
+    if [w, h] != model.grid_texture.size() {
+        let mut img = nannou::image::DynamicImage::new_rgb8(w, h);
+        let i_to_pos = |i: u32| {
+            let i = i as u32;
+            let (x, y) = (i % w, i / w);
+            let (x, y) = (x as f32 / w as f32, y as f32 / h as f32);
+            Vec2::new(x, y)
+        };
+        let energies = (0..w*h).map(i_to_pos).map(|x| model.grid.energy(x)).collect::<Vec<_>>();
+        let min_energy = energies.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_energy = energies.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let min_color = (58f32, 75f32, 84f32);
+        let max_color = (255f32, 255f32, 255f32);
+        let img_mut = img.as_mut_rgb8().unwrap();
+        img_mut.pixels_mut().into_iter().enumerate().for_each(|(i, pixel)| {
+            let energy = model.grid.energy(i_to_pos(i as u32));
+            let energy = (energy - min_energy) / (max_energy - min_energy);
+            let color = (min_color.0 + energy * (max_color.0 - min_color.0),
+                            min_color.1 + energy * (max_color.1 - min_color.1),
+                            min_color.2 + energy * (max_color.2 - min_color.2));
+            pixel[0] = color.0 as u8;
+            pixel[1] = color.1 as u8;
+            pixel[2] = color.2 as u8;
+        });
+        let texture = wgpu::Texture::from_image(app, &img);
+        model.grid_texture = texture;
+    }
 }
 
-fn view(app: &App, model: &Model, frame: Frame){
+fn view(app: &App, model: &Model, frame: Frame) {
     frame.clear(PURPLE);
     let draw = app.draw();
-    let (w, h) = app.main_window().inner_size_points();
-    let (w, h) = (w as u32, h as u32);
-    println!("w: {}, h: {}", w, h);
-    let mut img = nannou::image::DynamicImage::new_rgb8(w, h);
-    let i_to_pos = |i: u32| {
-        let i = i as u32;
-        let (x, y) = (i % w, i / w);
-        let (x, y) = (x as f32 / w as f32, y as f32 / h as f32);
-        Vec2::new(x, y)
-    };
-    let energies = (0..w*h).map(i_to_pos).map(|x| model.grid.energy(x)).collect::<Vec<_>>();
-    let min_energy = energies.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max_energy = energies.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let min_color = (58f32, 75f32, 84f32);
-    let max_color = (255f32, 255f32, 255f32);
-    let img_mut = img.as_mut_rgb8().unwrap();
-    img_mut.pixels_mut().into_iter().enumerate().for_each(|(i, pixel)| {
-        let energy = model.grid.energy(i_to_pos(i as u32));
-        let energy = (energy - min_energy) / (max_energy - min_energy);
-        let color = (min_color.0 + energy * (max_color.0 - min_color.0),
-                        min_color.1 + energy * (max_color.1 - min_color.1),
-                        min_color.2 + energy * (max_color.2 - min_color.2));
-        pixel[0] = color.0 as u8;
-        pixel[1] = color.1 as u8;
-        pixel[2] = color.2 as u8;
-    });
-    let texture = wgpu::Texture::from_image(app, &img);
-    draw.texture(&texture);
-    draw.to_frame(app, &frame).unwrap()
+    draw.texture(&model.grid_texture);
+    draw.ellipse().radius(10f32).xy(model.hmc.position.try_to_vec2().unwrap());
+    draw.to_frame(app, &frame).unwrap();
 }
