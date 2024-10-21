@@ -1,5 +1,6 @@
 #![feature(trait_alias)]
 use nannou::{image::DynamicImage, prelude::*};
+use nannou::rand;
 
 fn main() {
     nannou::app(model)
@@ -22,22 +23,43 @@ impl TryToVec2 for Vec<f32> {
     }
 }
 
+trait ToVec {
+    fn to_vec(&self) -> Vec<f32>;
+}
+
+impl ToVec for Vec2 {
+    fn to_vec(&self) -> Vec<f32> {
+        vec![self.x, self.y]
+    }
+}
+
+
 #[derive(Default, Debug, Clone, Copy)]
 struct PotentialGrid;
 
 impl PotentialEnergy<Vec2> for PotentialGrid {
     fn energy(&self, position: Vec2) -> f32 {
-        -(position - Vec2::new(0.5, 0.5)).length_squared()
+        (position - Vec2::new(0.5, 0.5)).length_squared()
     }
 
     fn gradient(&self, position: Vec2) -> Vec2 {
-        (Vec2::new(0.5, 0.5) - position) * 2.0
+        (position - Vec2::new(0.5, 0.5)) * 2.0
     }
 }
 
 trait PotentialEnergy<T> {
     fn energy(&self, position: T) -> f32;
     fn gradient(&self, position: T) -> T;
+}
+
+impl PotentialEnergy<Vec<f32>> for PotentialGrid {
+    fn energy(&self, position: Vec<f32>) -> f32 {
+        self.energy(position.try_to_vec2().unwrap())
+    }
+
+    fn gradient(&self, position: Vec<f32>) -> Vec<f32> {
+        self.gradient(position.try_to_vec2().unwrap()).to_vec()
+    }
 }
 
 trait AlmostFloat = Into<Vec<f32>> + From<Vec<f32>> + Clone;
@@ -58,7 +80,17 @@ struct HMCState {
 
 impl HMCState {
     fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
-
+        let mut rng = rand::thread_rng();
+        // leapfrog step
+        // position update
+        self.position = self.position.iter().zip(self.momentum.iter()).map(
+                |(x, p)| x + self.config.step_size * p / self.config.mass
+            ).collect();
+        // momentum update
+        let grad = energy.gradient(self.position.clone());
+        self.momentum = self.momentum.iter().zip(grad.iter()).map(
+                |(p,g)| p - self.config.step_size * g
+            ).collect();
     }
 }
 
@@ -78,7 +110,7 @@ fn model(app: &App) -> Model {
             config: HMCConfig {
                 step_size: 0.01,
                 num_steps: 10,
-                mass: 1.0,
+                mass: 5.0,
             }
         },
         grid_texture: wgpu::Texture::from_image(app, &img)
@@ -115,6 +147,8 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         let texture = wgpu::Texture::from_image(app, &img);
         model.grid_texture = texture;
     }
+
+    model.hmc.step(&model.grid);
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
