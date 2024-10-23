@@ -35,16 +35,32 @@ impl ToVec for Vec2 {
 }
 
 
-#[derive(Default, Debug, Clone, Copy)]
-struct PotentialGrid;
+#[derive(Debug, Clone)]
+struct PotentialGrid {
+    peaks: Vec<Vec2>,
+    scale: f32
+}
+
+impl Default for PotentialGrid {
+    fn default() -> Self {
+        PotentialGrid {
+            peaks: vec![Vec2::new(0.1, 0.9), Vec2::new(0.4, 0.5), Vec2::new(0.6, 0.3)],
+            scale: 4.0
+        }
+    }
+}
 
 impl PotentialEnergy<Vec2> for PotentialGrid {
     fn energy(&self, position: Vec2) -> f32 {
-        (position - Vec2::new(0.5, 0.5)).length_squared()
+        let position = position * 2. - Vec2::ONE;
+        let position = position * self.scale;
+        self.peaks.iter().map(|&peak| (position - peak).length_squared()).sum()
     }
 
     fn gradient(&self, position: Vec2) -> Vec2 {
-        (position - Vec2::new(0.5, 0.5)) * 2.0
+        let position = position * 2. - Vec2::ONE;
+        let position = position * self.scale;
+        self.peaks.iter().map(|&peak| (position - peak)).fold(Vec2::ZERO, std::ops::Add::add) * 2.0
     }
 }
 
@@ -208,8 +224,14 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
     draw.texture(&model.grid_texture);
     let (w, h) = app.main_window().inner_size_points();
-    let particle = model.hmc.position.try_to_vec2().unwrap() ;
-    let particle = particle - Vec2::new(0.5, 0.5);
-    draw.xy(Vec2::new(w as f32, -h as f32) * particle).ellipse().radius(10f32).color(RED);
+    let ball = (&model.hmc.position, RED);
+    for (position, color) in match &model.hmc.past_state {
+        Some((position, _)) => vec![(position, YELLOW), ball],
+        None => vec![ball],
+    } {
+        let particle = position.try_to_vec2().unwrap();
+        let particle = particle - Vec2::new(0.5, 0.5);
+        draw.xy(Vec2::new(w as f32, -h as f32) * particle).ellipse().radius(10f32).color(color);
+    }
     draw.to_frame(app, &frame).unwrap();
 }
