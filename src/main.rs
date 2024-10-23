@@ -1,6 +1,7 @@
 #![feature(trait_alias)]
 use nannou::{image::DynamicImage, prelude::*};
-use nannou::rand;
+use nannou::rand::{self, Rng};
+use rand_distr::Distribution;
 
 fn main() {
     nannou::app(model)
@@ -75,12 +76,35 @@ struct HMCConfig {
 struct HMCState {
     position: Vec<f32>,
     momentum: Vec<f32>,
-    config: HMCConfig
+    config: HMCConfig,
+    past_state: Option<(Vec<f32>, f32)>, // (position, energy)
+    since_past: usize,  // number of steps since last past state
+}
+
+impl Default for HMCState {
+    fn default() -> Self {
+        return HMCState {
+            position: vec![],
+            momentum: vec![],
+            config: HMCConfig {
+                step_size: 1e-3,
+                num_steps: 10,
+                mass: 1.0,
+            },
+            past_state: None,
+            since_past: 0,
+        }
+    }
 }
 
 impl HMCState {
-    fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
+    fn regenerate_momentum(&mut self) {
         let mut rng = rand::thread_rng();
+        let normal_distribution = rand_distr::Normal::new(0.0, 1.0).unwrap();
+        self.momentum = self.momentum.iter().map(|_| normal_distribution.sample(&mut rng)).collect();
+    }
+
+    fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
         // leapfrog step
         // position update
         self.position = self.position.iter().zip(self.momentum.iter()).map(
@@ -91,6 +115,33 @@ impl HMCState {
         self.momentum = self.momentum.iter().zip(grad.iter()).map(
                 |(p,g)| p - self.config.step_size * g
             ).collect();
+        self.since_past += 1;
+        if self.since_past >= self.config.num_steps {
+            let hamiltonian = energy.energy(self.position.clone())
+                + 0.5 * self.momentum.iter().map(|p| p*p).sum::<f32>() * self.config.mass;
+            let mut rng = rand::thread_rng();
+            match &self.past_state {
+                Some((past_position, past_hamiltonian)) => {
+                    if hamiltonian < *past_hamiltonian {
+                        self.position = past_position.clone();
+                    } else {
+                        let delta_hamiltonian = hamiltonian - past_hamiltonian;
+                        let accept_prob = (delta_hamiltonian).exp();
+                        if rng.gen::<f32>() < accept_prob {
+                            self.past_state = Some((self.position.clone(), hamiltonian));
+                        } else {
+                            self.position = past_position.clone();
+                        }
+                    }
+                },
+                None => {
+                    self.past_state = Some((self.position.clone(), hamiltonian));
+                }
+            }
+            self.past_state = Some((self.position.clone(), hamiltonian));
+            self.since_past = 0;
+            self.regenerate_momentum();
+        }
     }
 }
 
@@ -108,10 +159,11 @@ fn model(app: &App) -> Model {
             position: vec![0.2, 0.7],
             momentum: vec![0.9, -0.3],
             config: HMCConfig {
-                step_size: 0.01,
-                num_steps: 10,
-                mass: 5.0,
-            }
+                step_size: 5e-3,
+                num_steps: 40,
+                mass: 1.0,
+            },
+            ..Default::default()
         },
         grid_texture: wgpu::Texture::from_image(app, &img)
     }
