@@ -61,7 +61,7 @@ impl PotentialEnergy<Vec2> for PotentialGrid {
         let position = position * 2. - Vec2::ONE;
         let position = position * self.scale;
         let gradient = self.peaks.iter().map(|&peak| (position - peak)).fold(Vec2::ZERO, std::ops::Add::add) * 2.0;
-        gradient / self.scale / 2.
+        gradient * self.scale * 2.
     }
 }
 
@@ -122,7 +122,7 @@ impl HMCState {
     }
 
     fn kinetic_energy(&self, momentum: &Vec<f32>) -> f32 {
-        momentum.iter().map(|p| p*p).sum::<f32>() * 0.5 * self.config.mass
+        momentum.iter().map(|p| p*p).sum::<f32>() * 0.5 / self.config.mass
     }
 
     fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
@@ -137,6 +137,11 @@ impl HMCState {
                 |(p,g)| p - self.config.step_size * g
             ).collect();
         self.since_past += 1;
+
+        let potential = energy.energy(self.position.clone());
+        let kinetic = self.kinetic_energy(&self.momentum);
+        // println!("{} {} {}", potential, kinetic, potential + kinetic);
+
         if self.since_past >= self.config.num_steps {
             let kinetic_after_sim = self.kinetic_energy(&self.momentum);
             self.regenerate_momentum();
@@ -152,6 +157,7 @@ impl HMCState {
                     println!("H_old: {}, H_new: {}", hamiltonian_before_sim, hamiltonian_comparable_to_before_sim);
                     println!("KE_old: {}, KE_new: {}", kinetic_before_sim, kinetic_after_sim);
                     println!("PE_old: {}, PE_new: {}", potential_before_sim, potential);
+                    println!();
                     // exp(-H_new)/exp(-H_old) >= 1
                     // H_old - H_new <= 0
                     // H_old <= H_new 
@@ -194,9 +200,9 @@ fn model(app: &App) -> Model {
             position: vec![0.2, 0.7],
             momentum: vec![0.9, -0.3],
             config: HMCConfig {
-                step_size: 5e-3,
+                step_size: 1e-3,
                 num_steps: 40,
-                mass: 1.0,
+                mass: 0.8,
             },
             ..Default::default()
         },
