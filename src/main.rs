@@ -60,7 +60,8 @@ impl PotentialEnergy<Vec2> for PotentialGrid {
     fn gradient(&self, position: Vec2) -> Vec2 {
         let position = position * 2. - Vec2::ONE;
         let position = position * self.scale;
-        self.peaks.iter().map(|&peak| (position - peak)).fold(Vec2::ZERO, std::ops::Add::add) * 2.0
+        let gradient = self.peaks.iter().map(|&peak| (position - peak)).fold(Vec2::ZERO, std::ops::Add::add) * 2.0;
+        gradient / self.scale / 2.
     }
 }
 
@@ -93,7 +94,7 @@ struct HMCState {
     position: Vec<f32>,
     momentum: Vec<f32>,
     config: HMCConfig,
-    past_state: Option<(Vec<f32>, f32)>, // (position, energy)
+    past_state: Option<(Vec<f32>, f32, f32)>, // (position, potential energy, kinetic energy)
     since_past: usize,  // number of steps since last past state
 }
 
@@ -120,6 +121,10 @@ impl HMCState {
         self.momentum = self.momentum.iter().map(|_| normal_distribution.sample(&mut rng)).collect();
     }
 
+    fn kinetic_energy(&self, momentum: &Vec<f32>) -> f32 {
+        momentum.iter().map(|p| p*p).sum::<f32>() * 0.5 * self.config.mass
+    }
+
     fn step(&mut self, energy: &dyn PotentialEnergy<Vec<f32>>) {
         // leapfrog step
         // position update
@@ -133,30 +138,44 @@ impl HMCState {
             ).collect();
         self.since_past += 1;
         if self.since_past >= self.config.num_steps {
-            let hamiltonian = energy.energy(self.position.clone())
-                + 0.5 * self.momentum.iter().map(|p| p*p).sum::<f32>() * self.config.mass;
+            let kinetic_after_sim = self.kinetic_energy(&self.momentum);
+            self.regenerate_momentum();
+            let kinetic_following_this = self.kinetic_energy(&self.momentum);
+
+            let mut potential = energy.energy(self.position.clone());
+
             let mut rng = rand::thread_rng();
             match &self.past_state {
-                Some((past_position, past_hamiltonian)) => {
-                    if hamiltonian < *past_hamiltonian {
-                        self.position = past_position.clone();
+                Some((past_position, potential_before_sim, kinetic_before_sim)) => {
+                    let hamiltonian_before_sim = potential_before_sim + kinetic_before_sim;
+                    let hamiltonian_comparable_to_before_sim: f32 = potential + kinetic_after_sim;
+                    println!("H_old: {}, H_new: {}", hamiltonian_before_sim, hamiltonian_comparable_to_before_sim);
+                    println!("KE_old: {}, KE_new: {}", kinetic_before_sim, kinetic_after_sim);
+                    println!("PE_old: {}, PE_new: {}", potential_before_sim, potential);
+                    // exp(-H_new)/exp(-H_old) >= 1
+                    // H_old - H_new <= 0
+                    // H_old <= H_new 
+                    // unconditional accept
+                    if hamiltonian_comparable_to_before_sim > hamiltonian_before_sim {
+                        // accepted
                     } else {
-                        let delta_hamiltonian = hamiltonian - past_hamiltonian;
+                        let delta_hamiltonian = hamiltonian_comparable_to_before_sim - hamiltonian_before_sim;
                         let accept_prob = (delta_hamiltonian).exp();
                         if rng.gen::<f32>() < accept_prob {
-                            self.past_state = Some((self.position.clone(), hamiltonian));
+                            // accepted
                         } else {
+                            // rejected
                             self.position = past_position.clone();
+                            potential = *potential_before_sim;
                         }
                     }
                 },
                 None => {
-                    self.past_state = Some((self.position.clone(), hamiltonian));
+                    // also unconditional accept
                 }
             }
-            self.past_state = Some((self.position.clone(), hamiltonian));
+            self.past_state = Some((self.position.clone(), potential, kinetic_following_this));
             self.since_past = 0;
-            self.regenerate_momentum();
         }
     }
 }
@@ -226,7 +245,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let (w, h) = app.main_window().inner_size_points();
     let ball = (&model.hmc.position, RED);
     for (position, color) in match &model.hmc.past_state {
-        Some((position, _)) => vec![(position, YELLOW), ball],
+        Some((position, _, _)) => vec![(position, YELLOW), ball],
         None => vec![ball],
     } {
         let particle = position.try_to_vec2().unwrap();
